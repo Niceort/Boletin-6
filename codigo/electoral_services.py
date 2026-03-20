@@ -103,6 +103,48 @@ class SeatCalculatorService:
 
 
 class StatisticsService:
+
+    def build_report(self, election: EleccionCongreso2023) -> str:
+        statistics = self.build_general_statistics(election)
+        lines: List[str] = []
+        lines.append("RESUMEN GENERAL")
+        lines.append("- Circunscripciones: {0}".format(statistics["total_circunscripciones"]))
+        lines.append("- Partidos: {0}".format(statistics["total_partidos"]))
+        lines.append("- Votos a candidaturas: {0}".format(statistics["total_votos"]))
+        lines.append("- Escaños oficiales: {0}".format(statistics["total_escanos_oficiales"]))
+        lines.append("- Escaños calculados: {0}".format(statistics["total_escanos_calculados"]))
+        lines.append("")
+        lines.append("TOP 10 PARTIDOS POR VOTO")
+        for index, item in enumerate(statistics["ranking_partidos"][0:10], start=1):
+            etiqueta = str(item["sigla"]) if str(item["sigla"]) else str(item["nombre"])
+            lines.append(
+                "{0}. {1}: {2} votos | {3} escaños oficiales | {4} calculados".format(
+                    index,
+                    etiqueta,
+                    item["votos"],
+                    item["escanos_oficiales"],
+                    item["escanos_calculados"],
+                )
+            )
+
+        diferencias = statistics["diferencias"]
+        lines.append("")
+        lines.append("DIFERENCIAS DE ESCAÑOS")
+        if len(diferencias) == 0:
+            lines.append("- No se detectaron diferencias entre escaños oficiales y calculados.")
+        else:
+            for item in diferencias[0:20]:
+                lines.append(
+                    "- {0} | {1}: oficiales={2}, calculados={3}, diferencia={4}".format(
+                        item["circunscripcion"],
+                        item["partido"],
+                        item["oficiales"],
+                        item["calculados"],
+                        item["diferencia"],
+                    )
+                )
+        return "\n".join(lines)
+
     def build_general_statistics(self, election: EleccionCongreso2023) -> Dict[str, object]:
         total_circunscripciones = len(election.circunscripciones)
         total_partidos = len(election.partidos)
