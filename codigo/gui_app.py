@@ -5,7 +5,7 @@ from typing import List, Optional
 
 import customtkinter as ctk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from tkinter import END
+from tkinter import END, filedialog
 from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
@@ -51,17 +51,20 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.path_entry.grid(row=0, column=1, sticky="ew", padx=8, pady=8)
         self.path_entry.insert(0, self.default_excel_path)
 
+        browse_button = ctk.CTkButton(header_frame, text="Buscar Excel", command=self.browse_excel_file)
+        browse_button.grid(row=0, column=2, padx=8, pady=8)
+
         load_button = ctk.CTkButton(header_frame, text="Cargar Excel", command=self.load_election_file)
-        load_button.grid(row=0, column=2, padx=8, pady=8)
+        load_button.grid(row=0, column=3, padx=8, pady=8)
 
         reload_button = ctk.CTkButton(header_frame, text="Recalcular y validar", command=self.recalculate_and_validate)
-        reload_button.grid(row=0, column=3, padx=8, pady=8)
+        reload_button.grid(row=0, column=4, padx=8, pady=8)
 
         title_label = ctk.CTkLabel(header_frame, text="Ruta del Excel:")
         title_label.grid(row=0, column=0, padx=8, pady=8)
 
         self.status_label = ctk.CTkLabel(header_frame, text="Pendiente de carga")
-        self.status_label.grid(row=1, column=0, columnspan=4, sticky="w", padx=8, pady=8)
+        self.status_label.grid(row=1, column=0, columnspan=5, sticky="w", padx=8, pady=8)
 
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
@@ -148,14 +151,56 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.code_tabview = ctk.CTkTabview(self.tab_code)
         self.code_tabview.pack(fill="both", expand=True, padx=12, pady=12)
 
+    def browse_excel_file(self) -> None:
+        initial_directory = self._get_initial_directory()
+        selected_path = filedialog.askopenfilename(
+            title="Selecciona el archivo Excel de resultados",
+            initialdir=initial_directory,
+            filetypes=[("Archivos Excel", "*.xlsx *.xlsm *.xltx *.xltm"), ("Todos los archivos", "*.*")],
+        )
+        if selected_path == "":
+            return
+        self.path_entry.delete(0, END)
+        self.path_entry.insert(0, selected_path)
+        self.status_label.configure(text="Archivo seleccionado: {0}".format(selected_path))
+
+    def _get_initial_directory(self) -> str:
+        entry_path = self.path_entry.get().strip()
+        expanded_entry_path = os.path.expanduser(entry_path)
+        if os.path.isdir(expanded_entry_path):
+            return expanded_entry_path
+        if os.path.isfile(expanded_entry_path):
+            return os.path.dirname(expanded_entry_path)
+        project_data_directory = os.path.join(self.project_root, "data")
+        if os.path.isdir(project_data_directory):
+            return project_data_directory
+        return self.project_root
+
+    def _resolve_excel_path(self, raw_path: str) -> str:
+        candidate = os.path.expanduser(raw_path.strip())
+        if candidate == "":
+            raise FileNotFoundError("Debes indicar una ruta de Excel antes de cargar los datos.")
+
+        candidate = os.path.normpath(candidate)
+        if os.path.isabs(candidate):
+            return candidate
+
+        project_relative_path = os.path.normpath(os.path.join(self.project_root, candidate))
+        if os.path.exists(project_relative_path):
+            return project_relative_path
+        return candidate
+
     def load_election_file(self) -> None:
-        path = self.path_entry.get().strip()
+        raw_path = self.path_entry.get().strip()
         try:
-            loader = ElectionDataLoader(path)
+            resolved_path = self._resolve_excel_path(raw_path)
+            self.path_entry.delete(0, END)
+            self.path_entry.insert(0, resolved_path)
+            loader = ElectionDataLoader(resolved_path)
             election, messages = loader.load_election()
             self.election = election
             self.loader_messages = messages
-            self.status_label.configure(text="Archivo cargado correctamente: {0}".format(path))
+            self.status_label.configure(text="Archivo cargado correctamente: {0}".format(resolved_path))
             self.recalculate_and_validate()
             self.populate_selectors()
             self.fill_results_for_selected_circunscription()
@@ -218,145 +263,109 @@ class ElectionAnalyzerApplication(ctk.CTk):
     def fill_results_for_selected_circunscription(self) -> None:
         for item in self.results_tree.get_children():
             self.results_tree.delete(item)
+
         if self.election is None:
             return
-        selected = self.circunscription_selector.get().strip()
-        if selected == "":
+
+        circunscription_value = self.circunscription_selector.get().strip()
+        if circunscription_value == "":
             return
-        codigo = selected.split(" - ")[0]
-        circunscripcion = self.election.circunscripciones[codigo]
+
+        circ_code = circunscription_value.split(" - ", 1)[0]
+        circunscription = self.election.circunscripciones.get(circ_code)
+        if circunscription is None:
+            return
+
         selected_party = self.party_selector.get().strip()
-        for resultado in circunscripcion.obtener_resultados_ordenados_por_votos():
-            if selected_party not in ["", "Todos"]:
-                codigo_partido = selected_party.split(" - ")[0]
-                if resultado.partido.codigo != codigo_partido:
+        for result in circunscription.obtener_resultados_ordenados_por_votos():
+            if selected_party not in ("", "Todos"):
+                selected_party_code = selected_party.split(" - ", 1)[0]
+                if result.partido.codigo != selected_party_code:
                     continue
-            porcentaje = circunscripcion.obtener_porcentaje_partido(resultado.partido.codigo)
+
             self.results_tree.insert(
                 "",
                 END,
                 values=(
-                    resultado.partido.get_identificador_presentacion(),
-                    resultado.votos,
-                    "{0:.2f}".format(porcentaje),
-                    resultado.escanos_oficiales,
-                    resultado.escanos_calculados,
-                    resultado.diferencia_escanos,
+                    result.partido.get_identificador_presentacion(),
+                    result.votos,
+                    "{0:.2f}".format(result.obtener_porcentaje_voto(circunscription.votos_totales_candidaturas_calculados)),
+                    result.escanos_oficiales,
+                    result.escanos_calculados,
+                    result.obtener_diferencia_escanos(),
                 ),
             )
 
     def render_statistics(self) -> None:
         if self.election is None:
-            self._write_text(self.statistics_text, "No hay datos cargados.")
+            self._write_text(self.statistics_text, "No hay datos cargados para calcular estadisticas.")
             return
-        statistics = self.statistics_service.build_general_statistics(self.election)
-        lines: List[str] = []
-        lines.append("Resumen general")
-        lines.append("- Circunscripciones: {0}".format(statistics["total_circunscripciones"]))
-        lines.append("- Partidos: {0}".format(statistics["total_partidos"]))
-        lines.append("- Votos validos: {0}".format(statistics["total_votos"]))
-        lines.append("- Escaños oficiales acumulados: {0}".format(statistics["total_escanos_oficiales"]))
-        lines.append("- Escaños calculados acumulados: {0}".format(statistics["total_escanos_calculados"]))
-        lines.append("")
-        lines.append("Ranking nacional por votos")
-        ranking = statistics["ranking_partidos"]
-        for index in range(0, min(15, len(ranking))):
-            item = ranking[index]
-            lines.append(
-                "{0}. {1} -> votos={2}, esc_of={3}, esc_calc={4}".format(
-                    index + 1,
-                    item["sigla"] if item["sigla"] else item["nombre"],
-                    item["votos"],
-                    item["escanos_oficiales"],
-                    item["escanos_calculados"],
-                )
-            )
-        lines.append("")
-        lines.append("Diferencias entre escaños oficiales y calculados")
-        diferencias = statistics["diferencias"]
-        if len(diferencias) == 0:
-            lines.append("No se detectaron diferencias.")
-        else:
-            for item in diferencias[0:20]:
-                lines.append(
-                    "- {0} / {1}: oficiales={2}, calculados={3}, diferencia={4}".format(
-                        item["circunscripcion"],
-                        item["partido"],
-                        item["oficiales"],
-                        item["calculados"],
-                        item["diferencia"],
-                    )
-                )
-        self._write_text(self.statistics_text, "\n".join(lines))
+        report = self.statistics_service.build_report(self.election)
+        self._write_text(self.statistics_text, report)
 
     def render_charts(self) -> None:
         for widget in self.charts_container.winfo_children():
             widget.destroy()
+
         if self.election is None:
             return
 
-        selected = self.circunscription_selector.get().strip()
-        if selected == "":
+        circ_a = self._get_selected_circunscription(self.compare_a_selector.get())
+        circ_b = self._get_selected_circunscription(self.compare_b_selector.get())
+        if circ_a is None or circ_b is None:
             return
-        codigo = selected.split(" - ")[0]
-        circunscripcion = self.election.circunscripciones[codigo]
 
-        top_figure = self.chart_generator.build_party_votes_chart(self.election)
-        top_canvas = FigureCanvasTkAgg(top_figure, master=self.charts_container)
-        top_canvas.draw()
-        top_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        figure_votes = self.chart_generator.build_votes_chart(circ_a, circ_b)
+        canvas_votes = FigureCanvasTkAgg(figure_votes, master=self.charts_container)
+        canvas_votes.draw()
+        canvas_votes.get_tk_widget().grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
 
-        seats_figure = self.chart_generator.build_circunscription_seats_chart(circunscripcion)
-        seats_canvas = FigureCanvasTkAgg(seats_figure, master=self.charts_container)
-        seats_canvas.draw()
-        seats_canvas.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+        figure_seats = self.chart_generator.build_seats_chart(circ_a, circ_b)
+        canvas_seats = FigureCanvasTkAgg(figure_seats, master=self.charts_container)
+        canvas_seats.draw()
+        canvas_seats.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
 
-        compare_a = self.compare_a_selector.get().strip()
-        compare_b = self.compare_b_selector.get().strip()
-        if compare_a != "" and compare_b != "":
-            codigo_a = compare_a.split(" - ")[0]
-            codigo_b = compare_b.split(" - ")[0]
-            comparison_figure = self.chart_generator.build_circunscription_comparison_chart(
-                self.election, codigo_a, codigo_b
-            )
-            comparison_canvas = FigureCanvasTkAgg(comparison_figure, master=self.charts_container)
-            comparison_canvas.draw()
-            comparison_canvas.get_tk_widget().grid(row=2, column=0, sticky="nsew", padx=8, pady=8)
+    def _get_selected_circunscription(self, selector_value: str):
+        if self.election is None:
+            return None
+        if selector_value.strip() == "":
+            return None
+        circ_code = selector_value.split(" - ", 1)[0]
+        return self.election.circunscripciones.get(circ_code)
 
     def _show_project_structure(self) -> None:
         lines: List[str] = []
-        lines.append("EJERCICIO 2/")
-        lines.append("├── codigo/")
-        code_directory = os.path.join(self.project_root, "codigo")
-        if os.path.isdir(code_directory):
-            file_names = sorted([name for name in os.listdir(code_directory) if name.endswith(".py")])
-            for index, name in enumerate(file_names):
-                prefix = "└──" if index == len(file_names) - 1 else "├──"
-                lines.append("│   {0} {1}".format(prefix, name))
-        lines.append("└── data/")
-        data_directory = os.path.join(self.project_root, "data")
-        if os.path.isdir(data_directory):
-            data_names = sorted(os.listdir(data_directory))
-            for index, name in enumerate(data_names):
-                prefix = "└──" if index == len(data_names) - 1 else "├──"
-                lines.append("    {0} {1}".format(prefix, name))
+        for current_root, directories, files in os.walk(self.project_root):
+            directories.sort()
+            files.sort()
+            relative_root = os.path.relpath(current_root, self.project_root)
+            depth = 0 if relative_root == "." else relative_root.count(os.sep) + 1
+            indent = "    " * depth
+            folder_name = os.path.basename(current_root) if relative_root != "." else os.path.basename(self.project_root)
+            lines.append("{0}{1}/".format(indent, folder_name))
+            child_indent = "    " * (depth + 1)
+            for filename in files:
+                lines.append("{0}{1}".format(child_indent, filename))
         self._write_text(self.structure_text, "\n".join(lines))
 
     def _show_code_files(self) -> None:
         code_directory = os.path.join(self.project_root, "codigo")
         if not os.path.isdir(code_directory):
             return
-        file_names = sorted([name for name in os.listdir(code_directory) if name.endswith(".py")])
-        for name in file_names:
-            tab = self.code_tabview.add(name)
-            viewer = ScrolledText(tab, wrap="none")
-            viewer.pack(fill="both", expand=True)
-            with open(os.path.join(code_directory, name), "r", encoding="utf-8") as handler:
-                viewer.insert("1.0", handler.read())
-            viewer.configure(state="disabled")
+        for filename in sorted(os.listdir(code_directory)):
+            if not filename.endswith(".py"):
+                continue
+            tab_name = filename.replace(".py", "")
+            tab = self.code_tabview.add(tab_name)
+            text_box = ScrolledText(tab, wrap="none")
+            text_box.pack(fill="both", expand=True)
+            file_path = os.path.join(code_directory, filename)
+            with open(file_path, "r", encoding="utf-8") as code_file:
+                text_box.insert(END, code_file.read())
+            text_box.configure(state="disabled")
 
     def _write_text(self, widget: ScrolledText, content: str) -> None:
         widget.configure(state="normal")
         widget.delete("1.0", END)
-        widget.insert("1.0", content)
+        widget.insert(END, content)
         widget.configure(state="disabled")
