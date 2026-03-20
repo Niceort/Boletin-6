@@ -36,8 +36,6 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.loader_messages: List[str] = []
 
         self._build_layout()
-        self._show_project_structure()
-        self._show_code_files()
 
     def _build_layout(self) -> None:
         self.grid_columnconfigure(0, weight=1)
@@ -73,15 +71,11 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.tab_validations = self.tabview.add("Validaciones")
         self.tab_statistics = self.tabview.add("Estadisticas")
         self.tab_charts = self.tabview.add("Graficos")
-        self.tab_structure = self.tabview.add("Estructura")
-        self.tab_code = self.tabview.add("Codigo")
 
         self._build_results_tab()
         self._build_validation_tab()
         self._build_statistics_tab()
         self._build_charts_tab()
-        self._build_structure_tab()
-        self._build_code_tab()
 
     def _build_results_tab(self) -> None:
         self.tab_results.grid_columnconfigure(0, weight=1)
@@ -142,14 +136,6 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.charts_container.grid_columnconfigure(0, weight=1)
         self.charts_container.grid_rowconfigure(0, weight=1)
         self.charts_container.grid_rowconfigure(1, weight=1)
-
-    def _build_structure_tab(self) -> None:
-        self.structure_text = ScrolledText(self.tab_structure, wrap="none")
-        self.structure_text.pack(fill="both", expand=True, padx=12, pady=12)
-
-    def _build_code_tab(self) -> None:
-        self.code_tabview = ctk.CTkTabview(self.tab_code)
-        self.code_tabview.pack(fill="both", expand=True, padx=12, pady=12)
 
     def browse_excel_file(self) -> None:
         initial_directory = self._get_initial_directory()
@@ -332,37 +318,6 @@ class ElectionAnalyzerApplication(ctk.CTk):
             return None
         circ_code = selector_value.split(" - ", 1)[0]
         return self.election.circunscripciones.get(circ_code)
-
-    def _show_project_structure(self) -> None:
-        lines: List[str] = []
-        for current_root, directories, files in os.walk(self.project_root):
-            directories.sort()
-            files.sort()
-            relative_root = os.path.relpath(current_root, self.project_root)
-            depth = 0 if relative_root == "." else relative_root.count(os.sep) + 1
-            indent = "    " * depth
-            folder_name = os.path.basename(current_root) if relative_root != "." else os.path.basename(self.project_root)
-            lines.append("{0}{1}/".format(indent, folder_name))
-            child_indent = "    " * (depth + 1)
-            for filename in files:
-                lines.append("{0}{1}".format(child_indent, filename))
-        self._write_text(self.structure_text, "\n".join(lines))
-
-    def _show_code_files(self) -> None:
-        code_directory = os.path.join(self.project_root, "codigo")
-        if not os.path.isdir(code_directory):
-            return
-        for filename in sorted(os.listdir(code_directory)):
-            if not filename.endswith(".py"):
-                continue
-            tab_name = filename.replace(".py", "")
-            tab = self.code_tabview.add(tab_name)
-            text_box = ScrolledText(tab, wrap="none")
-            text_box.pack(fill="both", expand=True)
-            file_path = os.path.join(code_directory, filename)
-            with open(file_path, "r", encoding="utf-8") as code_file:
-                text_box.insert(END, code_file.read())
-            text_box.configure(state="disabled")
 
     def _write_text(self, widget: ScrolledText, content: str) -> None:
         widget.configure(state="normal")
