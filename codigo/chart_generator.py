@@ -8,6 +8,34 @@ from models import Circunscripcion, EleccionCongreso2023
 
 
 class ChartGenerator:
+
+    def build_votes_chart(self, circunscripcion_a: Circunscripcion, circunscripcion_b: Circunscripcion) -> Figure:
+        figure = Figure(figsize=(7, 4), dpi=100)
+        axis = figure.add_subplot(111)
+        nombres = [circunscripcion_a.nombre, circunscripcion_b.nombre]
+        votos = [
+            circunscripcion_a.total_votos_validos_calculado,
+            circunscripcion_b.total_votos_validos_calculado,
+        ]
+        axis.bar(nombres, votos, color=["#2fa572", "#f39c12"])
+        axis.set_title("Comparativa de votos validos")
+        axis.set_ylabel("Votos")
+        figure.tight_layout()
+        return figure
+
+    def build_seats_chart(self, circunscripcion_a: Circunscripcion, circunscripcion_b: Circunscripcion) -> Figure:
+        figure = Figure(figsize=(7, 4), dpi=100)
+        axis = figure.add_subplot(111)
+        nombres = [circunscripcion_a.nombre, circunscripcion_b.nombre]
+        escanos = [
+            circunscripcion_a.total_escanos_calculados,
+            circunscripcion_b.total_escanos_calculados,
+        ]
+        axis.bar(nombres, escanos, color=["#7b61ff", "#ff6b6b"])
+        axis.set_title("Comparativa de escaños calculados")
+        axis.set_ylabel("Escaños")
+        figure.tight_layout()
+        return figure
     def build_party_votes_chart(self, election: EleccionCongreso2023, limit: int = 10) -> Figure:
         resumen = election.obtener_resumen_nacional_por_partido()[0:limit]
         etiquetas: List[str] = []

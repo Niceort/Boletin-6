@@ -37,6 +37,14 @@ class ResultadoPartido:
     def diferencia_escanos(self) -> int:
         return self.escanos_calculados - self.escanos_oficiales
 
+    def obtener_diferencia_escanos(self) -> int:
+        return self.diferencia_escanos
+
+    def obtener_porcentaje_voto(self, total_votos: int) -> float:
+        if total_votos <= 0:
+            return 0.0
+        return (float(self.votos) / float(total_votos)) * 100.0
+
 
 @dataclass
 class Circunscripcion:
@@ -74,6 +82,10 @@ class Circunscripcion:
         for resultado in self.resultados_por_partido.values():
             acumulado = acumulado + resultado.votos
         return acumulado
+
+    @property
+    def votos_totales_candidaturas_calculados(self) -> int:
+        return self.total_votos_validos_calculado
 
     @property
     def total_escanos_calculados(self) -> int:
