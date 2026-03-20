@@ -21,7 +21,7 @@ class Partido:
     sigla: str
 
     def get_identificador_presentacion(self) -> str:
-        if self.sigla:
+        if self.sigla != "":
             return self.sigla
         return self.nombre
 
@@ -36,6 +36,16 @@ class ResultadoPartido:
     @property
     def diferencia_escanos(self) -> int:
         return self.escanos_calculados - self.escanos_oficiales
+
+    def obtener_porcentaje_voto(self, total_votos: int) -> float:
+        if total_votos <= 0:
+            return 0.0
+        return (float(self.votos) / float(total_votos)) * 100.0
+
+    def obtener_escanos_para_presentacion(self, use_calculated: bool = True) -> int:
+        if use_calculated:
+            return self.escanos_calculados
+        return self.escanos_oficiales
 
 
 @dataclass
@@ -68,6 +78,14 @@ class Circunscripcion:
         resultados.sort(key=lambda elemento: (-elemento.votos, elemento.partido.nombre))
         return resultados
 
+    def obtener_resultados_con_escanos(self, use_calculated: bool = True) -> List[ResultadoPartido]:
+        resultados_filtrados: List[ResultadoPartido] = []
+        for resultado in self.obtener_resultados_ordenados_por_votos():
+            escanos = resultado.obtener_escanos_para_presentacion(use_calculated)
+            if escanos > 0:
+                resultados_filtrados.append(resultado)
+        return resultados_filtrados
+
     @property
     def total_votos_validos_calculado(self) -> int:
         acumulado = 0
@@ -88,6 +106,16 @@ class Circunscripcion:
         for resultado in self.resultados_por_partido.values():
             acumulado = acumulado + resultado.escanos_oficiales
         return acumulado
+
+    @property
+    def total_votos_candidaturas_referencia(self) -> int:
+        if self.votos_totales_candidaturas_oficiales is not None:
+            return self.votos_totales_candidaturas_oficiales
+        return self.total_votos_validos_calculado
+
+    @property
+    def mayoria_absoluta(self) -> int:
+        return int(self.escanos_oficiales_totales / 2) + 1
 
     def obtener_porcentaje_partido(self, codigo_partido: str) -> float:
         if codigo_partido not in self.resultados_por_partido:
@@ -110,9 +138,9 @@ class EleccionCongreso2023:
     def registrar_partido(self, partido: Partido) -> str:
         if partido.codigo in self.partidos:
             partido_existente = self.partidos[partido.codigo]
-            if not partido_existente.nombre and partido.nombre:
+            if partido_existente.nombre == "" and partido.nombre != "":
                 partido_existente.nombre = partido.nombre
-            if not partido_existente.sigla and partido.sigla:
+            if partido_existente.sigla == "" and partido.sigla != "":
                 partido_existente.sigla = partido.sigla
             return DomainMessageBuilder.build_confirmation(
                 "Se reutilizo el partido {0}.".format(partido.codigo)
@@ -145,6 +173,26 @@ class EleccionCongreso2023:
                 resultados.append(circunscripcion.resultados_por_partido[codigo_partido])
         resultados.sort(key=lambda resultado: (-resultado.votos, resultado.partido.nombre))
         return resultados
+
+    @property
+    def total_escanos_nacionales(self) -> int:
+        acumulado = 0
+        for circunscripcion in self.circunscripciones.values():
+            acumulado = acumulado + circunscripcion.escanos_oficiales_totales
+        return acumulado
+
+    @property
+    def mayoria_absoluta_nacional(self) -> int:
+        return int(self.total_escanos_nacionales / 2) + 1
+
+    def obtener_peso_circunscripcion(self, codigo_circunscripcion: str) -> float:
+        if codigo_circunscripcion not in self.circunscripciones:
+            return 0.0
+        total_escanos = self.total_escanos_nacionales
+        if total_escanos <= 0:
+            return 0.0
+        escanos_circunscripcion = self.circunscripciones[codigo_circunscripcion].escanos_oficiales_totales
+        return (float(escanos_circunscripcion) / float(total_escanos)) * 100.0
 
     def obtener_resumen_nacional_por_partido(self) -> List[Dict[str, object]]:
         resumen: Dict[str, Dict[str, object]] = {}
