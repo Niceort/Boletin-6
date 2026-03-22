@@ -247,6 +247,55 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self._write_text(self.province_results_text, "Todavía no hay resultados cargados.")
 
         right_panel = ctk.CTkFrame(self.tab_provinces)
+
+        self.results_feedback_label = ctk.CTkLabel(
+            controls_frame,
+            text="Selecciona una vista territorial y arrastra partidos al pactómetro.",
+            anchor="w",
+            justify="left",
+        )
+        self.results_feedback_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+
+        left_panel = ctk.CTkFrame(self.tab_results)
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=(0, 12))
+        left_panel.grid_columnconfigure(0, weight=1)
+        left_panel.grid_rowconfigure(2, weight=1)
+        left_panel.grid_rowconfigure(3, weight=0)
+
+        self.results_title_label = ctk.CTkLabel(left_panel, text="Resultados visuales", font=ctk.CTkFont(size=22, weight="bold"))
+        self.results_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+
+        self.results_summary_label = ctk.CTkLabel(left_panel, text="Carga el Excel para ver el resumen territorial.", anchor="w", justify="left")
+        self.results_summary_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        blocks_frame = ctk.CTkFrame(left_panel)
+        blocks_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        blocks_frame.grid_columnconfigure(0, weight=1)
+        blocks_frame.grid_rowconfigure(0, weight=1)
+
+        self.blocks_canvas = ResultsBlocksCanvas(
+            blocks_frame,
+            color_registry=self.party_color_registry,
+            drop_callback=self.on_party_dropped,
+            status_callback=self.set_results_feedback,
+            bg="#1E293B",
+        )
+        self.blocks_canvas.grid(row=0, column=0, sticky="nsew")
+
+        blocks_scrollbar = tk.Scrollbar(blocks_frame, orient="vertical")
+        blocks_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.blocks_canvas.attach_scrollbar(blocks_scrollbar)
+
+        self.pactometer_widget = PactometerWidget(
+            left_panel,
+            color_registry=self.party_color_registry,
+            remove_callback=self.remove_party_from_pactometer,
+            bg="#10212F",
+            height=148,
+        )
+        self.pactometer_widget.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        right_panel = ctk.CTkFrame(self.tab_results)
         right_panel.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(0, 12))
         right_panel.grid_columnconfigure(0, weight=1)
         right_panel.grid_rowconfigure(1, weight=1)
@@ -396,6 +445,10 @@ class ElectionAnalyzerApplication(ctk.CTk):
             compare_values = [""]
         if len(province_values) == 0:
             province_values = ["Sin datos"]
+        for circunscripcion in self.election.obtener_circunscripciones_ordenadas():
+            compare_values.append("{0} - {1}".format(circunscripcion.codigo, circunscripcion.nombre))
+        if len(compare_values) == 0:
+            compare_values = [""]
         self.compare_a_selector.configure(values=compare_values)
         self.compare_b_selector.configure(values=compare_values)
         self.compare_a_selector.set(compare_values[0])
@@ -458,6 +511,15 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.map_caption_label.configure(text=self._build_map_caption_text(territorial_view.nombre))
         self._write_text(self.province_results_text, self._build_province_report(territorial_view))
         self._render_map_image()
+            return
+
+        summary_text = self._build_results_summary_text(territorial_view)
+        self.results_title_label.configure(text="{0} — bloques por partido".format(territorial_view.nombre))
+        self.results_summary_label.configure(text=summary_text)
+        self.blocks_canvas.render_view(territorial_view)
+        coalition_parties = self._get_current_coalition_parties()
+        self.pactometer_widget.render(territorial_view, coalition_parties)
+        self._render_coalition_panel(coalition_parties)
 
     def on_party_dropped(self, party_code: str, root_x: int, root_y: int) -> None:
         if self.current_territorial_view is None:
@@ -549,6 +611,15 @@ class ElectionAnalyzerApplication(ctk.CTk):
             return None
         circ_code = selector_value.split(" - ", 1)[0]
         return self.election.circunscripciones.get(circ_code)
+
+    def _get_current_territorial_view(self):
+        if self.election is None:
+            return None
+        selector_value = self.circunscription_selector.get().strip()
+        if selector_value == "":
+            selector_value = "General — 100.00%"
+        territory_code = self.territorial_view_service.extract_code_from_selector_value(selector_value)
+        return self.territorial_view_service.build_view(self.election, territory_code)
 
     def _build_results_summary_text(self, territorial_view) -> str:
         visible_parties = territorial_view.partidos_visibles
