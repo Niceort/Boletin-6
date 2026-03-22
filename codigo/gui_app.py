@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tkinter as tk
+import unicodedata
 from typing import List, Optional
 
 import customtkinter as ctk
@@ -43,6 +44,9 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.current_territorial_view = None
         self.current_results_options: List[str] = []
         self.current_coalition_codes: List[str] = []
+        self.map_image_path = self._find_map_image_path()
+        self.original_map_image: Optional[tk.PhotoImage] = None
+        self.rendered_map_image: Optional[tk.PhotoImage] = None
 
         self._build_layout()
 
@@ -77,11 +81,13 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.tabview.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 12))
 
         self.tab_results = self.tabview.add("Resultados")
+        self.tab_provinces = self.tabview.add("Provincias")
         self.tab_validations = self.tabview.add("Validaciones")
         self.tab_statistics = self.tabview.add("Estadisticas")
         self.tab_charts = self.tabview.add("Graficos")
 
         self._build_results_tab()
+        self._build_provinces_tab()
         self._build_validation_tab()
         self._build_statistics_tab()
         self._build_charts_tab()
@@ -184,6 +190,133 @@ class ElectionAnalyzerApplication(ctk.CTk):
         clear_button = ctk.CTkButton(right_panel, text="Vaciar pactómetro", command=self.clear_pactometer)
         clear_button.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
 
+    def _build_provinces_tab(self) -> None:
+        self.tab_provinces.grid_columnconfigure(0, weight=2)
+        self.tab_provinces.grid_columnconfigure(1, weight=3)
+        self.tab_provinces.grid_rowconfigure(1, weight=1)
+
+        controls_frame = ctk.CTkFrame(self.tab_provinces)
+        controls_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
+        controls_frame.grid_columnconfigure(1, weight=1)
+
+        province_label = ctk.CTkLabel(controls_frame, text="Provincia:")
+        province_label.grid(row=0, column=0, padx=8, pady=8, sticky="w")
+
+        self.province_selector = ctk.CTkComboBox(
+            controls_frame,
+            values=["Sin datos"],
+            command=self.on_province_selected,
+            width=320,
+        )
+        self.province_selector.grid(row=0, column=1, padx=8, pady=8, sticky="w")
+        self.province_selector.set("Sin datos")
+
+        refresh_provinces_button = ctk.CTkButton(
+            controls_frame,
+            text="Actualizar provincia",
+            command=self.render_provinces_view,
+        )
+        refresh_provinces_button.grid(row=0, column=2, padx=8, pady=8)
+
+        self.provinces_status_label = ctk.CTkLabel(
+            controls_frame,
+            text="Carga el Excel para inspeccionar una provincia sobre el mapa.",
+            anchor="w",
+            justify="left",
+        )
+        self.provinces_status_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+
+        left_panel = ctk.CTkFrame(self.tab_provinces)
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=(0, 12))
+        left_panel.grid_columnconfigure(0, weight=1)
+        left_panel.grid_rowconfigure(2, weight=1)
+
+        self.province_title_label = ctk.CTkLabel(left_panel, text="Detalle provincial", font=ctk.CTkFont(size=22, weight="bold"))
+        self.province_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+
+        self.province_summary_label = ctk.CTkLabel(
+            left_panel,
+            text="Selecciona una provincia para mostrar sus datos electorales.",
+            anchor="w",
+            justify="left",
+        )
+        self.province_summary_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        self.province_results_text = ScrolledText(left_panel, wrap="word", height=18)
+        self.province_results_text.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self._write_text(self.province_results_text, "Todavía no hay resultados cargados.")
+
+        right_panel = ctk.CTkFrame(self.tab_provinces)
+
+        self.results_feedback_label = ctk.CTkLabel(
+            controls_frame,
+            text="Selecciona una vista territorial y arrastra partidos al pactómetro.",
+            anchor="w",
+            justify="left",
+        )
+        self.results_feedback_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+
+        left_panel = ctk.CTkFrame(self.tab_results)
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=(0, 12))
+        left_panel.grid_columnconfigure(0, weight=1)
+        left_panel.grid_rowconfigure(2, weight=1)
+        left_panel.grid_rowconfigure(3, weight=0)
+
+        self.results_title_label = ctk.CTkLabel(left_panel, text="Resultados visuales", font=ctk.CTkFont(size=22, weight="bold"))
+        self.results_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+
+        self.results_summary_label = ctk.CTkLabel(left_panel, text="Carga el Excel para ver el resumen territorial.", anchor="w", justify="left")
+        self.results_summary_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        blocks_frame = ctk.CTkFrame(left_panel)
+        blocks_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        blocks_frame.grid_columnconfigure(0, weight=1)
+        blocks_frame.grid_rowconfigure(0, weight=1)
+
+        self.blocks_canvas = ResultsBlocksCanvas(
+            blocks_frame,
+            color_registry=self.party_color_registry,
+            drop_callback=self.on_party_dropped,
+            status_callback=self.set_results_feedback,
+            bg="#1E293B",
+        )
+        self.blocks_canvas.grid(row=0, column=0, sticky="nsew")
+
+        blocks_scrollbar = tk.Scrollbar(blocks_frame, orient="vertical")
+        blocks_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.blocks_canvas.attach_scrollbar(blocks_scrollbar)
+
+        self.pactometer_widget = PactometerWidget(
+            left_panel,
+            color_registry=self.party_color_registry,
+            remove_callback=self.remove_party_from_pactometer,
+            bg="#10212F",
+            height=148,
+        )
+        self.pactometer_widget.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        right_panel = ctk.CTkFrame(self.tab_results)
+        right_panel.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(0, 12))
+        right_panel.grid_columnconfigure(0, weight=1)
+        right_panel.grid_rowconfigure(1, weight=1)
+
+        map_title = ctk.CTkLabel(right_panel, text="Mapa de España", font=ctk.CTkFont(size=20, weight="bold"))
+        map_title.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 8))
+
+        self.map_canvas = tk.Canvas(right_panel, bg="#0F172A", highlightthickness=0)
+        self.map_canvas.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.map_canvas.bind("<Configure>", self._on_map_canvas_resize)
+
+        self.map_caption_label = ctk.CTkLabel(
+            right_panel,
+            text="La imagen del mapa se buscará automáticamente dentro de la carpeta data.",
+            anchor="w",
+            justify="left",
+        )
+        self.map_caption_label.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        self._render_map_image()
+
     def _build_validation_tab(self) -> None:
         self.validation_text = ScrolledText(self.tab_validations, wrap="word")
         self.validation_text.pack(fill="both", expand=True, padx=12, pady=12)
@@ -268,6 +401,7 @@ class ElectionAnalyzerApplication(ctk.CTk):
             self.refresh_results_view()
             self.render_statistics()
             self.render_charts()
+            self.render_provinces_view()
         except FileNotFoundError as error:
             self.status_label.configure(text=str(error))
             self._write_text(self.validation_text, str(error))
@@ -292,6 +426,7 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.refresh_results_view()
         self.render_statistics()
         self.render_charts()
+        self.render_provinces_view()
 
     def populate_selectors(self) -> None:
         if self.election is None:
@@ -302,6 +437,14 @@ class ElectionAnalyzerApplication(ctk.CTk):
             self.circunscription_selector.set(self.current_results_options[0])
 
         compare_values: List[str] = []
+        province_values: List[str] = []
+        for circunscripcion in self.election.obtener_circunscripciones_ordenadas():
+            compare_values.append("{0} - {1}".format(circunscripcion.codigo, circunscripcion.nombre))
+            province_values.append(circunscripcion.nombre)
+        if len(compare_values) == 0:
+            compare_values = [""]
+        if len(province_values) == 0:
+            province_values = ["Sin datos"]
         for circunscripcion in self.election.obtener_circunscripciones_ordenadas():
             compare_values.append("{0} - {1}".format(circunscripcion.codigo, circunscripcion.nombre))
         if len(compare_values) == 0:
@@ -310,10 +453,15 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.compare_b_selector.configure(values=compare_values)
         self.compare_a_selector.set(compare_values[0])
         self.compare_b_selector.set(compare_values[min(1, len(compare_values) - 1)])
+        self.province_selector.configure(values=province_values)
+        self.province_selector.set(province_values[0])
 
     def on_circunscription_selected(self, _: str) -> None:
         self.clear_pactometer(silent=True)
         self.refresh_results_view()
+
+    def on_province_selected(self, _: str) -> None:
+        self.render_provinces_view()
 
     def refresh_results_view(self) -> None:
         territorial_view = None
@@ -331,6 +479,38 @@ class ElectionAnalyzerApplication(ctk.CTk):
             self.blocks_canvas.render_view(self._build_empty_view())
             self.pactometer_widget.render(None, [])
             self._render_coalition_panel([])
+            return
+
+        summary_text = self._build_results_summary_text(territorial_view)
+        self.results_title_label.configure(text="{0} — bloques por partido".format(territorial_view.nombre))
+        self.results_summary_label.configure(text=summary_text)
+        self.blocks_canvas.render_view(territorial_view)
+        coalition_parties = self._get_current_coalition_parties()
+        self.pactometer_widget.render(territorial_view, coalition_parties)
+        self._render_coalition_panel(coalition_parties)
+
+    def render_provinces_view(self) -> None:
+        if self.election is None:
+            self.province_title_label.configure(text="Detalle provincial")
+            self.province_summary_label.configure(text="Carga el Excel para consultar una provincia.")
+            self.provinces_status_label.configure(text="No hay datos cargados todavía.")
+            self._write_text(self.province_results_text, "Todavía no hay resultados cargados.")
+            self._render_map_image()
+            return
+
+        province_name = self.province_selector.get().strip()
+        if province_name == "":
+            province_name = self.election.obtener_circunscripciones_ordenadas()[0].nombre
+            self.province_selector.set(province_name)
+        territorial_view = self.territorial_view_service.build_view(self.election, province_name)
+        self.province_title_label.configure(text="{0} — detalle provincial".format(territorial_view.nombre))
+        self.province_summary_label.configure(text=self._build_results_summary_text(territorial_view))
+        self.provinces_status_label.configure(
+            text="Mostrando la provincia {0} sobre la referencia del mapa disponible.".format(territorial_view.nombre)
+        )
+        self.map_caption_label.configure(text=self._build_map_caption_text(territorial_view.nombre))
+        self._write_text(self.province_results_text, self._build_province_report(territorial_view))
+        self._render_map_image()
             return
 
         summary_text = self._build_results_summary_text(territorial_view)
@@ -457,6 +637,42 @@ class ElectionAnalyzerApplication(ctk.CTk):
             len(visible_parties),
         )
 
+    def _build_province_report(self, territorial_view) -> str:
+        lines: List[str] = []
+        lines.append("Provincia: {0}".format(territorial_view.nombre))
+        lines.append("Escaños oficiales: {0}".format(territorial_view.total_escanos_oficiales))
+        lines.append("Escaños calculados: {0}".format(territorial_view.total_escanos_calculados))
+        lines.append("Votos a candidaturas: {0}".format(territorial_view.total_votos))
+        lines.append("")
+        lines.append("Partidos con representación:")
+        if len(territorial_view.partidos_visibles) == 0:
+            lines.append("- No hay partidos con escaños oficiales en esta provincia.")
+            return "\n".join(lines)
+
+        ranking = 1
+        for party in territorial_view.partidos_visibles:
+            difference = party.escanos_calculados - party.escanos_oficiales
+            lines.append(
+                "{0}. {1} | votos: {2} | escaños oficiales: {3} | escaños calculados: {4} | diferencia: {5}".format(
+                    ranking,
+                    party.etiqueta,
+                    party.votos,
+                    party.escanos_oficiales,
+                    party.escanos_calculados,
+                    difference,
+                )
+            )
+            ranking = ranking + 1
+        return "\n".join(lines)
+
+    def _build_map_caption_text(self, province_name: str) -> str:
+        if self.map_image_path is None:
+            return (
+                "No se ha encontrado el PNG del mapa en la carpeta data. "
+                "Añádelo como 'Mapa españa.png' o con un nombre similar para mostrarlo aquí."
+            )
+        return "Mapa cargado desde: {0}\nProvincia seleccionada: {1}".format(self.map_image_path, province_name)
+
     def _get_current_coalition_parties(self) -> List[TerritorialPartySummary]:
         coalition_parties: List[TerritorialPartySummary] = []
         if self.current_territorial_view is None:
@@ -531,6 +747,89 @@ class ElectionAnalyzerApplication(ctk.CTk):
             )
             remove_button.grid(row=0, column=2, padx=8, pady=8)
             row_index = row_index + 1
+
+    def _render_map_image(self) -> None:
+        self.map_canvas.delete("all")
+        self.map_image_path = self._find_map_image_path()
+        if self.map_image_path is None:
+            self.original_map_image = None
+            self.rendered_map_image = None
+            self.map_canvas.create_text(
+                24,
+                24,
+                anchor="nw",
+                text="No se ha encontrado 'Mapa españa' dentro de data.",
+                fill="#E2E8F0",
+                font=("Arial", 14, "bold"),
+                width=max(self.map_canvas.winfo_width() - 48, 220),
+            )
+            return
+
+        try:
+            self.original_map_image = tk.PhotoImage(file=self.map_image_path)
+        except tk.TclError:
+            self.original_map_image = None
+            self.rendered_map_image = None
+            self.map_canvas.create_text(
+                24,
+                24,
+                anchor="nw",
+                text="No se pudo abrir la imagen del mapa. Asegúrate de que sea un PNG compatible con Tk.",
+                fill="#FCA5A5",
+                font=("Arial", 14, "bold"),
+                width=max(self.map_canvas.winfo_width() - 48, 220),
+            )
+            return
+
+        self._draw_resized_map_image()
+
+    def _draw_resized_map_image(self) -> None:
+        self.map_canvas.delete("all")
+        if self.original_map_image is None:
+            return
+        canvas_width = max(self.map_canvas.winfo_width(), 320)
+        canvas_height = max(self.map_canvas.winfo_height(), 320)
+        image_width = self.original_map_image.width()
+        image_height = self.original_map_image.height()
+        sample_ratio = max(1, (image_width + canvas_width - 1) // canvas_width, (image_height + canvas_height - 1) // canvas_height)
+        self.rendered_map_image = self.original_map_image.subsample(sample_ratio, sample_ratio)
+        center_x = canvas_width // 2
+        center_y = canvas_height // 2
+        self.map_canvas.create_image(center_x, center_y, image=self.rendered_map_image)
+
+    def _on_map_canvas_resize(self, _event) -> None:
+        if self.original_map_image is None:
+            self._render_map_image()
+            return
+        self._draw_resized_map_image()
+
+    def _find_map_image_path(self) -> Optional[str]:
+        data_directory = os.path.join(self.project_root, "data")
+        if not os.path.isdir(data_directory):
+            return None
+
+        preferred_keywords = ["mapaespaña", "mapaespana", "mapa españa", "mapa espana"]
+        supported_extensions = {".png", ".gif", ".ppm", ".pgm"}
+        candidates: List[str] = []
+        for entry_name in os.listdir(data_directory):
+            entry_path = os.path.join(data_directory, entry_name)
+            if not os.path.isfile(entry_path):
+                continue
+            extension = os.path.splitext(entry_name)[1].lower()
+            if extension not in supported_extensions:
+                continue
+            normalized_name = self._normalize_text_for_lookup(os.path.splitext(entry_name)[0])
+            if any(keyword in normalized_name for keyword in preferred_keywords):
+                return entry_path
+            candidates.append(entry_path)
+        if len(candidates) == 1:
+            return candidates[0]
+        return None
+
+    def _normalize_text_for_lookup(self, value: str) -> str:
+        normalized = unicodedata.normalize("NFD", value)
+        without_accents = "".join(character for character in normalized if unicodedata.category(character) != "Mn")
+        return without_accents.lower().replace("_", " ").replace("-", " ")
 
     def _build_empty_view(self):
         class EmptyView:

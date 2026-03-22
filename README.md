@@ -10,12 +10,13 @@ Aplicación orientada a objetos para cargar un Excel con resultados del Congreso
 - **Validación de coherencia**: `codigo/electoral_services.py` comprueba el total de votos por circunscripción, la suma de escaños oficiales y las diferencias entre escaños oficiales y recalculados.
 - **Cálculo de escaños**: el servicio de cálculo aplica D'Hondt con barrera del 3% sobre votos válidos a candidaturas.
 - **Consultas y análisis**: la interfaz permite consultar resultados por circunscripción y partido, además de mostrar estadísticas agregadas y diferencias.
+- **Vista provincial**: la pestaña `Provincias` permite seleccionar una circunscripción, revisar su detalle y mostrar el mapa de España si existe un recurso de imagen compatible dentro de `data/`.
 - **Gráficos**: la pestaña de gráficos compara votos y escaños entre dos circunscripciones.
 
 ## Estructura principal
 
 - `codigo/main.py`: arranque de la aplicación.
-- `codigo/gui_app.py`: interfaz gráfica con pestañas de resultados, validaciones, estadísticas y gráficos.
+- `codigo/gui_app.py`: interfaz gráfica con pestañas de resultados, provincias, validaciones, estadísticas y gráficos.
 - `codigo/excel_loader.py`: lectura robusta del Excel.
 - `codigo/models.py`: entidades del dominio.
 - `codigo/electoral_services.py`: validaciones, cálculo de escaños y estadísticas.
