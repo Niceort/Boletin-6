@@ -51,6 +51,28 @@ class ValidationService:
                     circunscripcion.nombre, total_escanos_oficiales, circunscripcion.escanos_oficiales_totales
                 )
             )
+
+        diferencias = self._build_seat_difference_messages(circunscripcion)
+        if len(diferencias) == 0:
+            messages.append(
+                "CONFIRMACION: Los escaños calculados coinciden con los oficiales en {0}.".format(circunscripcion.nombre)
+            )
+        else:
+            messages.extend(diferencias)
+        return messages
+
+    def _build_seat_difference_messages(self, circunscripcion: Circunscripcion) -> List[str]:
+        messages: List[str] = []
+        for resultado in circunscripcion.obtener_resultados_ordenados_por_votos():
+            if resultado.escanos_calculados != resultado.escanos_oficiales:
+                messages.append(
+                    "ERROR: Diferencia de escaños en {0} para {1}: oficiales={2}, calculados={3}.".format(
+                        circunscripcion.nombre,
+                        resultado.partido.get_identificador_presentacion(),
+                        resultado.escanos_oficiales,
+                        resultado.escanos_calculados,
+                    )
+                )
         return messages
 
 
@@ -80,17 +102,17 @@ class SeatCalculatorService:
             if porcentaje >= self.threshold_percentage:
                 elegibles.append(resultado)
 
-        cocientes: List[Tuple[float, str]] = []
+        cocientes: List[Tuple[float, int, str]] = []
         for resultado in elegibles:
             divisor = 1
             while divisor <= circunscripcion.escanos_oficiales_totales:
                 cociente = float(resultado.votos) / float(divisor)
-                cocientes.append((cociente, resultado.partido.codigo))
+                cocientes.append((cociente, resultado.votos, resultado.partido.codigo))
                 divisor = divisor + 1
 
-        cocientes.sort(key=lambda item: (-item[0], item[1]))
+        cocientes.sort(key=lambda item: (-item[0], -item[1], item[2]))
         adjudicaciones = cocientes[0 : circunscripcion.escanos_oficiales_totales]
-        for _, codigo_partido in adjudicaciones:
+        for _, _, codigo_partido in adjudicaciones:
             circunscripcion.resultados_por_partido[codigo_partido].escanos_calculados = (
                 circunscripcion.resultados_por_partido[codigo_partido].escanos_calculados + 1
             )
@@ -103,7 +125,6 @@ class SeatCalculatorService:
 
 
 class StatisticsService:
-
     def build_report(self, election: EleccionCongreso2023) -> str:
         statistics = self.build_general_statistics(election)
         lines: List[str] = []
@@ -122,6 +143,19 @@ class StatisticsService:
                     index,
                     etiqueta,
                     item["votos"],
+                    item["escanos_oficiales"],
+                    item["escanos_calculados"],
+                )
+            )
+
+        lines.append("")
+        lines.append("ANALISIS TERRITORIAL")
+        for item in statistics["resumen_territorial"][0:5]:
+            lines.append(
+                "- {0}: votos={1}, partidos con votos={2}, escaños oficiales={3}, escaños calculados={4}".format(
+                    item["circunscripcion"],
+                    item["votos"],
+                    item["partidos"],
                     item["escanos_oficiales"],
                     item["escanos_calculados"],
                 )
@@ -159,6 +193,7 @@ class StatisticsService:
 
         resumen_partidos = election.obtener_resumen_nacional_por_partido()
         diferencias = self.build_seat_differences(election)
+        resumen_territorial = self.build_territorial_summary(election)
 
         return {
             "total_circunscripciones": total_circunscripciones,
@@ -168,6 +203,7 @@ class StatisticsService:
             "total_escanos_calculados": total_escanos_calculados,
             "ranking_partidos": resumen_partidos,
             "diferencias": diferencias,
+            "resumen_territorial": resumen_territorial,
         }
 
     def build_circunscription_comparison(
@@ -202,3 +238,18 @@ class StatisticsService:
                     )
         diferencias.sort(key=lambda item: (-abs(int(item["diferencia"])), str(item["circunscripcion"])))
         return diferencias
+
+    def build_territorial_summary(self, election: EleccionCongreso2023) -> List[Dict[str, object]]:
+        resumen: List[Dict[str, object]] = []
+        for circunscripcion in election.obtener_circunscripciones_ordenadas():
+            resumen.append(
+                {
+                    "circunscripcion": circunscripcion.nombre,
+                    "votos": circunscripcion.total_votos_validos_calculado,
+                    "partidos": len(circunscripcion.resultados_por_partido),
+                    "escanos_oficiales": circunscripcion.total_escanos_oficiales,
+                    "escanos_calculados": circunscripcion.total_escanos_calculados,
+                }
+            )
+        resumen.sort(key=lambda item: (-int(item["votos"]), str(item["circunscripcion"])))
+        return resumen
