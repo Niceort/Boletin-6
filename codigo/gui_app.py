@@ -264,6 +264,7 @@ class ElectionAnalyzerApplication(ctk.CTk):
             self.loader_messages = messages
             self.status_label.configure(text="Archivo cargado correctamente: {0}".format(resolved_path))
             self.populate_selectors()
+            self.recalculate_and_validate()
             self.refresh_results_view()
             self.render_statistics()
             self.render_charts()
@@ -315,7 +316,14 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.refresh_results_view()
 
     def refresh_results_view(self) -> None:
-        territorial_view = self._get_current_territorial_view()
+        territorial_view = None
+        if self.election is not None:
+            selector_value = self.circunscription_selector.get().strip()
+            if selector_value == "":
+                selector_value = "General — 100.00%"
+            territory_code = self.territorial_view_service.extract_code_from_selector_value(selector_value)
+            territorial_view = self.territorial_view_service.build_view(self.election, territory_code)
+
         self.current_territorial_view = territorial_view
         if territorial_view is None:
             self.results_title_label.configure(text="Resultados visuales")
@@ -423,6 +431,113 @@ class ElectionAnalyzerApplication(ctk.CTk):
             return None
         circ_code = selector_value.split(" - ", 1)[0]
         return self.election.circunscripciones.get(circ_code)
+
+    def _get_current_territorial_view(self):
+        if self.election is None:
+            return None
+        selector_value = self.circunscription_selector.get().strip()
+        if selector_value == "":
+            selector_value = "General — 100.00%"
+        territory_code = self.territorial_view_service.extract_code_from_selector_value(selector_value)
+        return self.territorial_view_service.build_view(self.election, territory_code)
+
+    def _build_results_summary_text(self, territorial_view) -> str:
+        visible_parties = territorial_view.partidos_visibles
+        return (
+            "Peso territorial: {0:.2f}% del total nacional de escaños\n"
+            "Votos a candidaturas: {1}\n"
+            "Escaños oficiales: {2}\n"
+            "Mayoría necesaria: {3}\n"
+            "Partidos visibles: {4}"
+        ).format(
+            territorial_view.porcentaje_peso_escanos,
+            territorial_view.total_votos,
+            territorial_view.total_escanos_oficiales,
+            territorial_view.mayoria_necesaria,
+            len(visible_parties),
+        )
+
+    def _get_current_coalition_parties(self) -> List[TerritorialPartySummary]:
+        coalition_parties: List[TerritorialPartySummary] = []
+        if self.current_territorial_view is None:
+            return coalition_parties
+        for party_code in self.current_coalition_codes:
+            party = self._find_party_in_current_view(party_code)
+            if party is not None:
+                coalition_parties.append(party)
+        return coalition_parties
+
+    def _find_party_in_current_view(self, party_code: str) -> Optional[TerritorialPartySummary]:
+        if self.current_territorial_view is None:
+            return None
+        for party in self.current_territorial_view.partidos_visibles:
+            if party.codigo == party_code:
+                return party
+        return None
+
+    def _render_coalition_panel(self, coalition_parties: List[TerritorialPartySummary]) -> None:
+        for widget in self.coalition_list_frame.winfo_children():
+            widget.destroy()
+        if self.current_territorial_view is None:
+            self.coalition_summary_label.configure(text="Carga el Excel para activar el pactómetro.")
+            return
+
+        coalition_total = 0
+        for party in coalition_parties:
+            coalition_total = coalition_total + party.escanos_oficiales
+
+        if coalition_total >= self.current_territorial_view.mayoria_necesaria:
+            majority_text = "Mayoría alcanzada"
+        else:
+            missing_seats = self.current_territorial_view.mayoria_necesaria - coalition_total
+            majority_text = "Faltan {0} escaños".format(missing_seats)
+
+        self.coalition_summary_label.configure(
+            text="Coalición actual: {0} / {1} escaños\n{2}".format(
+                coalition_total,
+                self.current_territorial_view.total_escanos_vista,
+                majority_text,
+            )
+        )
+
+        if len(coalition_parties) == 0:
+            empty_label = ctk.CTkLabel(self.coalition_list_frame, text="Arrastra bloques al pactómetro o pulsa sobre sus segmentos para retirarlos.")
+            empty_label.grid(row=0, column=0, sticky="w", padx=8, pady=8)
+            return
+
+        row_index = 0
+        for party in coalition_parties:
+            fill_color, _ = self.party_color_registry.get_party_colors(party.codigo, party.nombre, party.etiqueta)
+            row_frame = ctk.CTkFrame(self.coalition_list_frame)
+            row_frame.grid(row=row_index, column=0, sticky="ew", padx=8, pady=6)
+            row_frame.grid_columnconfigure(1, weight=1)
+
+            color_indicator = tk.Canvas(row_frame, width=18, height=18, highlightthickness=0, bg="#1F2937")
+            color_indicator.grid(row=0, column=0, padx=(8, 6), pady=8)
+            color_indicator.create_oval(2, 2, 16, 16, fill=fill_color, outline=fill_color)
+
+            party_label = ctk.CTkLabel(
+                row_frame,
+                text="{0} — {1} escaños".format(party.etiqueta, party.escanos_oficiales),
+                anchor="w",
+            )
+            party_label.grid(row=0, column=1, sticky="ew", padx=4, pady=8)
+
+            remove_button = ctk.CTkButton(
+                row_frame,
+                text="Quitar",
+                width=90,
+                command=lambda code=party.codigo: self.remove_party_from_pactometer(code),
+            )
+            remove_button.grid(row=0, column=2, padx=8, pady=8)
+            row_index = row_index + 1
+
+    def _build_empty_view(self):
+        class EmptyView:
+            nombre = "Sin datos"
+            partidos_visibles: List[TerritorialPartySummary] = []
+
+        return EmptyView()
 
     def _write_text(self, widget: ScrolledText, content: str) -> None:
         widget.configure(state="normal")
