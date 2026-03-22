@@ -6,7 +6,9 @@ import unicodedata
 from typing import List, Optional
 
 import customtkinter as ctk
+import matplotlib.image as mpimg
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 from tkinter import END, filedialog
 from tkinter.scrolledtext import ScrolledText
 
@@ -47,6 +49,7 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.map_image_path = self._find_map_image_path()
         self.original_map_image: Optional[tk.PhotoImage] = None
         self.rendered_map_image: Optional[tk.PhotoImage] = None
+        self.map_matplotlib_canvas: Optional[FigureCanvasTkAgg] = None
 
         self._build_layout()
 
@@ -240,6 +243,127 @@ class ElectionAnalyzerApplication(ctk.CTk):
             anchor="w",
             justify="left",
         )
+
+        self.results_feedback_label = ctk.CTkLabel(
+            controls_frame,
+            text="Selecciona una vista territorial y arrastra partidos al pactómetro.",
+            anchor="w",
+            justify="left",
+        )
+        self.results_feedback_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+
+        left_panel = ctk.CTkFrame(self.tab_results)
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=(0, 12))
+        left_panel.grid_columnconfigure(0, weight=1)
+        left_panel.grid_rowconfigure(2, weight=1)
+        left_panel.grid_rowconfigure(3, weight=0)
+
+        self.results_title_label = ctk.CTkLabel(left_panel, text="Resultados visuales", font=ctk.CTkFont(size=22, weight="bold"))
+        self.results_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+
+        self.results_summary_label = ctk.CTkLabel(left_panel, text="Carga el Excel para ver el resumen territorial.", anchor="w", justify="left")
+        self.results_summary_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        blocks_frame = ctk.CTkFrame(left_panel)
+        blocks_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        blocks_frame.grid_columnconfigure(0, weight=1)
+        blocks_frame.grid_rowconfigure(0, weight=1)
+
+        self.blocks_canvas = ResultsBlocksCanvas(
+            blocks_frame,
+            color_registry=self.party_color_registry,
+            drop_callback=self.on_party_dropped,
+            status_callback=self.set_results_feedback,
+            bg="#1E293B",
+        )
+        self.blocks_canvas.grid(row=0, column=0, sticky="nsew")
+
+        blocks_scrollbar = tk.Scrollbar(blocks_frame, orient="vertical")
+        blocks_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.blocks_canvas.attach_scrollbar(blocks_scrollbar)
+
+        self.pactometer_widget = PactometerWidget(
+            left_panel,
+            color_registry=self.party_color_registry,
+            remove_callback=self.remove_party_from_pactometer,
+            bg="#10212F",
+            height=148,
+        )
+        self.pactometer_widget.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        right_panel = ctk.CTkFrame(self.tab_results)
+        right_panel.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(0, 12))
+        right_panel.grid_columnconfigure(0, weight=1)
+        right_panel.grid_rowconfigure(1, weight=1)
+
+        coalition_title = ctk.CTkLabel(right_panel, text="Coalición actual", font=ctk.CTkFont(size=20, weight="bold"))
+        coalition_title.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 8))
+
+        self.coalition_summary_label = ctk.CTkLabel(
+            right_panel,
+            text="Todavía no hay partidos añadidos al pactómetro.",
+            justify="left",
+            anchor="w",
+        )
+        self.coalition_summary_label.grid(row=1, column=0, sticky="new", padx=12, pady=(0, 8))
+
+        self.coalition_list_frame = ctk.CTkScrollableFrame(right_panel, label_text="Partidos añadidos")
+        self.coalition_list_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self.coalition_list_frame.grid_columnconfigure(0, weight=1)
+
+        clear_button = ctk.CTkButton(right_panel, text="Vaciar pactómetro", command=self.clear_pactometer)
+        clear_button.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+    def _build_provinces_tab(self) -> None:
+        self.tab_provinces.grid_columnconfigure(0, weight=2)
+        self.tab_provinces.grid_columnconfigure(1, weight=3)
+        self.tab_provinces.grid_rowconfigure(1, weight=1)
+
+        controls_frame = ctk.CTkFrame(self.tab_provinces)
+        controls_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
+        controls_frame.grid_columnconfigure(1, weight=1)
+
+        province_label = ctk.CTkLabel(controls_frame, text="Provincia:")
+        province_label.grid(row=0, column=0, padx=8, pady=8, sticky="w")
+
+        self.province_selector = ctk.CTkComboBox(
+            controls_frame,
+            values=["Sin datos"],
+            command=self.on_province_selected,
+            width=320,
+        )
+        self.province_selector.grid(row=0, column=1, padx=8, pady=8, sticky="w")
+        self.province_selector.set("Sin datos")
+
+        refresh_provinces_button = ctk.CTkButton(
+            controls_frame,
+            text="Actualizar provincia",
+            command=self.render_provinces_view,
+        )
+        refresh_provinces_button.grid(row=0, column=2, padx=8, pady=8)
+
+        self.provinces_status_label = ctk.CTkLabel(
+            controls_frame,
+            text="Carga el Excel para inspeccionar una provincia sobre el mapa.",
+            anchor="w",
+            justify="left",
+        )
+        self.provinces_status_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+
+        left_panel = ctk.CTkFrame(self.tab_provinces)
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=(0, 12))
+        left_panel.grid_columnconfigure(0, weight=1)
+        left_panel.grid_rowconfigure(2, weight=1)
+
+        self.province_title_label = ctk.CTkLabel(left_panel, text="Detalle provincial", font=ctk.CTkFont(size=22, weight="bold"))
+        self.province_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+
+        self.province_summary_label = ctk.CTkLabel(
+            left_panel,
+            text="Selecciona una provincia para mostrar sus datos electorales.",
+            anchor="w",
+            justify="left",
+        )
         self.province_summary_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
 
         self.province_results_text = ScrolledText(left_panel, wrap="word", height=18)
@@ -303,8 +427,13 @@ class ElectionAnalyzerApplication(ctk.CTk):
         map_title = ctk.CTkLabel(right_panel, text="Mapa de España", font=ctk.CTkFont(size=20, weight="bold"))
         map_title.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 8))
 
-        self.map_canvas = tk.Canvas(right_panel, bg="#0F172A", highlightthickness=0)
-        self.map_canvas.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.map_container = ctk.CTkFrame(right_panel, fg_color="#0F172A")
+        self.map_container.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.map_container.grid_rowconfigure(0, weight=1)
+        self.map_container.grid_columnconfigure(0, weight=1)
+
+        self.map_canvas = tk.Canvas(self.map_container, bg="#0F172A", highlightthickness=0)
+        self.map_canvas.grid(row=0, column=0, sticky="nsew")
         self.map_canvas.bind("<Configure>", self._on_map_canvas_resize)
 
         self.map_caption_label = ctk.CTkLabel(
@@ -511,6 +640,14 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.map_caption_label.configure(text=self._build_map_caption_text(territorial_view.nombre))
         self._write_text(self.province_results_text, self._build_province_report(territorial_view))
         self._render_map_image()
+
+    def on_party_dropped(self, party_code: str, root_x: int, root_y: int) -> None:
+        if self.current_territorial_view is None:
+            self.set_results_feedback(DomainMessageBuilder.build_error("No hay una vista territorial activa."))
+            return
+        if not self.pactometer_widget.is_inside_widget(root_x, root_y):
+            self.set_results_feedback(DomainMessageBuilder.build_error("Debes soltar el bloque dentro del pactómetro."))
+            return
             return
 
         summary_text = self._build_results_summary_text(territorial_view)
@@ -749,39 +886,29 @@ class ElectionAnalyzerApplication(ctk.CTk):
             row_index = row_index + 1
 
     def _render_map_image(self) -> None:
-        self.map_canvas.delete("all")
+        self._clear_map_renderers()
         self.map_image_path = self._find_map_image_path()
         if self.map_image_path is None:
             self.original_map_image = None
             self.rendered_map_image = None
-            self.map_canvas.create_text(
-                24,
-                24,
-                anchor="nw",
-                text="No se ha encontrado 'Mapa españa' dentro de data.",
-                fill="#E2E8F0",
-                font=("Arial", 14, "bold"),
-                width=max(self.map_canvas.winfo_width() - 48, 220),
-            )
+            self._render_map_message("No se ha encontrado 'Mapa españa' dentro de data.", "#E2E8F0")
             return
 
         try:
             self.original_map_image = tk.PhotoImage(file=self.map_image_path)
+            self._draw_resized_map_image()
+            return
         except tk.TclError:
             self.original_map_image = None
             self.rendered_map_image = None
-            self.map_canvas.create_text(
-                24,
-                24,
-                anchor="nw",
-                text="No se pudo abrir la imagen del mapa. Asegúrate de que sea un PNG compatible con Tk.",
-                fill="#FCA5A5",
-                font=("Arial", 14, "bold"),
-                width=max(self.map_canvas.winfo_width() - 48, 220),
-            )
+
+        if self._render_map_with_matplotlib():
             return
 
-        self._draw_resized_map_image()
+        self._render_map_message(
+            "No se pudo abrir la imagen del mapa. Asegúrate de que sea un PNG válido o un GIF compatible.",
+            "#FCA5A5",
+        )
 
     def _draw_resized_map_image(self) -> None:
         self.map_canvas.delete("all")
@@ -797,7 +924,47 @@ class ElectionAnalyzerApplication(ctk.CTk):
         center_y = canvas_height // 2
         self.map_canvas.create_image(center_x, center_y, image=self.rendered_map_image)
 
+    def _render_map_with_matplotlib(self) -> bool:
+        if self.map_image_path is None:
+            return False
+        try:
+            image_data = mpimg.imread(self.map_image_path)
+        except Exception:
+            return False
+
+        self.map_canvas.grid_remove()
+        figure = Figure(figsize=(7.2, 5.4), dpi=100, facecolor="#0F172A")
+        axis = figure.add_subplot(111)
+        axis.imshow(image_data)
+        axis.axis("off")
+        figure.tight_layout(pad=0)
+
+        self.map_matplotlib_canvas = FigureCanvasTkAgg(figure, master=self.map_container)
+        self.map_matplotlib_canvas.draw()
+        self.map_matplotlib_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        return True
+
+    def _clear_map_renderers(self) -> None:
+        if self.map_matplotlib_canvas is not None:
+            self.map_matplotlib_canvas.get_tk_widget().destroy()
+            self.map_matplotlib_canvas = None
+        self.map_canvas.grid()
+        self.map_canvas.delete("all")
+
+    def _render_map_message(self, message: str, color: str) -> None:
+        self.map_canvas.create_text(
+            24,
+            24,
+            anchor="nw",
+            text=message,
+            fill=color,
+            font=("Arial", 14, "bold"),
+            width=max(self.map_canvas.winfo_width() - 48, 220),
+        )
+
     def _on_map_canvas_resize(self, _event) -> None:
+        if self.map_matplotlib_canvas is not None:
+            return
         if self.original_map_image is None:
             self._render_map_image()
             return
