@@ -263,7 +263,6 @@ class ElectionAnalyzerApplication(ctk.CTk):
             self.election = election
             self.loader_messages = messages
             self.status_label.configure(text="Archivo cargado correctamente: {0}".format(resolved_path))
-            self.recalculate_and_validate()
             self.populate_selectors()
             self.refresh_results_view()
             self.render_statistics()
