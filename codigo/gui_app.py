@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import os
+import tkinter as tk
 from typing import List, Optional
 
 import customtkinter as ctk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from tkinter import END, filedialog
-from tkinter import ttk
 from tkinter.scrolledtext import ScrolledText
 
 from chart_generator import ChartGenerator
 from electoral_services import SeatCalculatorService, StatisticsService, ValidationService
 from excel_loader import ElectionDataLoader, ExcelStructureError
-from models import EleccionCongreso2023
+from models import DomainMessageBuilder, EleccionCongreso2023
+from party_color_registry import PartyColorRegistry
+from results_visual_components import PactometerWidget, ResultsBlocksCanvas
+from territorial_view_service import TerritorialPartySummary, TerritorialViewService
 
 
 class ElectionAnalyzerApplication(ctk.CTk):
@@ -21,7 +24,8 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.project_root = project_root
         self.default_excel_path = default_excel_path
         self.title("Analizador de Elecciones Generales 2023")
-        self.geometry("1480x920")
+        self.geometry("1520x960")
+        self.minsize(1180, 780)
 
         ctk.set_appearance_mode("System")
         ctk.set_default_color_theme("blue")
@@ -30,10 +34,15 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.seat_calculator_service = SeatCalculatorService()
         self.statistics_service = StatisticsService()
         self.chart_generator = ChartGenerator()
+        self.territorial_view_service = TerritorialViewService()
+        self.party_color_registry = PartyColorRegistry()
 
         self.election: Optional[EleccionCongreso2023] = None
         self.validation_messages: List[str] = []
         self.loader_messages: List[str] = []
+        self.current_territorial_view = None
+        self.current_results_options: List[str] = []
+        self.current_coalition_codes: List[str] = []
 
         self._build_layout()
 
@@ -78,35 +87,102 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self._build_charts_tab()
 
     def _build_results_tab(self) -> None:
-        self.tab_results.grid_columnconfigure(0, weight=1)
+        self.tab_results.grid_columnconfigure(0, weight=3)
+        self.tab_results.grid_columnconfigure(1, weight=2)
         self.tab_results.grid_rowconfigure(1, weight=1)
 
-        filters = ctk.CTkFrame(self.tab_results)
-        filters.grid(row=0, column=0, sticky="ew", padx=12, pady=12)
+        controls_frame = ctk.CTkFrame(self.tab_results)
+        controls_frame.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
+        controls_frame.grid_columnconfigure(1, weight=1)
 
-        self.circunscription_selector = ctk.CTkComboBox(filters, values=[""], command=self.on_circunscription_selected)
-        self.circunscription_selector.grid(row=0, column=0, padx=8, pady=8)
+        territorial_label = ctk.CTkLabel(controls_frame, text="Vista territorial:")
+        territorial_label.grid(row=0, column=0, padx=8, pady=8, sticky="w")
 
-        self.party_selector = ctk.CTkComboBox(filters, values=[""], command=self.on_party_selected)
-        self.party_selector.grid(row=0, column=1, padx=8, pady=8)
-
-        self.results_tree = ttk.Treeview(
-            self.tab_results,
-            columns=("partido", "votos", "porcentaje", "oficiales", "calculados", "diferencia"),
-            show="headings",
+        self.circunscription_selector = ctk.CTkComboBox(
+            controls_frame,
+            values=["General — 100.00%"],
+            command=self.on_circunscription_selected,
+            width=320,
         )
-        columnas = [
-            ("partido", "Partido"),
-            ("votos", "Votos"),
-            ("porcentaje", "% voto"),
-            ("oficiales", "Esc. oficiales"),
-            ("calculados", "Esc. calculados"),
-            ("diferencia", "Diferencia"),
-        ]
-        for identificador, titulo in columnas:
-            self.results_tree.heading(identificador, text=titulo)
-            self.results_tree.column(identificador, stretch=True, width=160)
-        self.results_tree.grid(row=1, column=0, sticky="nsew", padx=12, pady=12)
+        self.circunscription_selector.grid(row=0, column=1, padx=8, pady=8, sticky="w")
+        self.circunscription_selector.set("General — 100.00%")
+
+        refresh_results_button = ctk.CTkButton(
+            controls_frame,
+            text="Actualizar vista",
+            command=self.refresh_results_view,
+        )
+        refresh_results_button.grid(row=0, column=2, padx=8, pady=8)
+
+        self.results_feedback_label = ctk.CTkLabel(
+            controls_frame,
+            text="Selecciona una vista territorial y arrastra partidos al pactómetro.",
+            anchor="w",
+            justify="left",
+        )
+        self.results_feedback_label.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+
+        left_panel = ctk.CTkFrame(self.tab_results)
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(12, 6), pady=(0, 12))
+        left_panel.grid_columnconfigure(0, weight=1)
+        left_panel.grid_rowconfigure(2, weight=1)
+        left_panel.grid_rowconfigure(3, weight=0)
+
+        self.results_title_label = ctk.CTkLabel(left_panel, text="Resultados visuales", font=ctk.CTkFont(size=22, weight="bold"))
+        self.results_title_label.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 4))
+
+        self.results_summary_label = ctk.CTkLabel(left_panel, text="Carga el Excel para ver el resumen territorial.", anchor="w", justify="left")
+        self.results_summary_label.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        blocks_frame = ctk.CTkFrame(left_panel)
+        blocks_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        blocks_frame.grid_columnconfigure(0, weight=1)
+        blocks_frame.grid_rowconfigure(0, weight=1)
+
+        self.blocks_canvas = ResultsBlocksCanvas(
+            blocks_frame,
+            color_registry=self.party_color_registry,
+            drop_callback=self.on_party_dropped,
+            status_callback=self.set_results_feedback,
+            bg="#1E293B",
+        )
+        self.blocks_canvas.grid(row=0, column=0, sticky="nsew")
+
+        blocks_scrollbar = tk.Scrollbar(blocks_frame, orient="vertical")
+        blocks_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.blocks_canvas.attach_scrollbar(blocks_scrollbar)
+
+        self.pactometer_widget = PactometerWidget(
+            left_panel,
+            color_registry=self.party_color_registry,
+            remove_callback=self.remove_party_from_pactometer,
+            bg="#10212F",
+            height=148,
+        )
+        self.pactometer_widget.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
+
+        right_panel = ctk.CTkFrame(self.tab_results)
+        right_panel.grid(row=1, column=1, sticky="nsew", padx=(6, 12), pady=(0, 12))
+        right_panel.grid_columnconfigure(0, weight=1)
+        right_panel.grid_rowconfigure(1, weight=1)
+
+        coalition_title = ctk.CTkLabel(right_panel, text="Coalición actual", font=ctk.CTkFont(size=20, weight="bold"))
+        coalition_title.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 8))
+
+        self.coalition_summary_label = ctk.CTkLabel(
+            right_panel,
+            text="Todavía no hay partidos añadidos al pactómetro.",
+            justify="left",
+            anchor="w",
+        )
+        self.coalition_summary_label.grid(row=1, column=0, sticky="new", padx=12, pady=(0, 8))
+
+        self.coalition_list_frame = ctk.CTkScrollableFrame(right_panel, label_text="Partidos añadidos")
+        self.coalition_list_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self.coalition_list_frame.grid_columnconfigure(0, weight=1)
+
+        clear_button = ctk.CTkButton(right_panel, text="Vaciar pactómetro", command=self.clear_pactometer)
+        clear_button.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 12))
 
     def _build_validation_tab(self) -> None:
         self.validation_text = ScrolledText(self.tab_validations, wrap="word")
@@ -189,7 +265,7 @@ class ElectionAnalyzerApplication(ctk.CTk):
             self.status_label.configure(text="Archivo cargado correctamente: {0}".format(resolved_path))
             self.recalculate_and_validate()
             self.populate_selectors()
-            self.fill_results_for_selected_circunscription()
+            self.refresh_results_view()
             self.render_statistics()
             self.render_charts()
         except FileNotFoundError as error:
@@ -213,74 +289,104 @@ class ElectionAnalyzerApplication(ctk.CTk):
         self.validation_messages.extend(calculation_messages)
         self.validation_messages.extend(validation_messages)
         self._write_text(self.validation_text, "\n".join(self.validation_messages))
-        self.fill_results_for_selected_circunscription()
+        self.refresh_results_view()
         self.render_statistics()
         self.render_charts()
 
     def populate_selectors(self) -> None:
         if self.election is None:
             return
-        circ_values: List[str] = []
-        for circ in self.election.obtener_circunscripciones_ordenadas():
-            circ_values.append("{0} - {1}".format(circ.codigo, circ.nombre))
-        if len(circ_values) == 0:
-            circ_values = [""]
-        self.circunscription_selector.configure(values=circ_values)
-        self.compare_a_selector.configure(values=circ_values)
-        self.compare_b_selector.configure(values=circ_values)
-        self.circunscription_selector.set(circ_values[0])
-        self.compare_a_selector.set(circ_values[0])
-        self.compare_b_selector.set(circ_values[min(1, len(circ_values) - 1)])
+        self.current_results_options = self.territorial_view_service.build_selector_options(self.election)
+        self.circunscription_selector.configure(values=self.current_results_options)
+        if len(self.current_results_options) > 0:
+            self.circunscription_selector.set(self.current_results_options[0])
 
-        party_values: List[str] = ["Todos"]
-        for partido in self.election.obtener_partidos_ordenados():
-            etiqueta = "{0} - {1}".format(partido.codigo, partido.get_identificador_presentacion())
-            party_values.append(etiqueta)
-        self.party_selector.configure(values=party_values)
-        self.party_selector.set(party_values[0])
+        compare_values: List[str] = []
+        for circunscripcion in self.election.obtener_circunscripciones_ordenadas():
+            compare_values.append("{0} - {1}".format(circunscripcion.codigo, circunscripcion.nombre))
+        if len(compare_values) == 0:
+            compare_values = [""]
+        self.compare_a_selector.configure(values=compare_values)
+        self.compare_b_selector.configure(values=compare_values)
+        self.compare_a_selector.set(compare_values[0])
+        self.compare_b_selector.set(compare_values[min(1, len(compare_values) - 1)])
 
     def on_circunscription_selected(self, _: str) -> None:
-        self.fill_results_for_selected_circunscription()
-        self.render_charts()
+        self.clear_pactometer(silent=True)
+        self.refresh_results_view()
 
-    def on_party_selected(self, _: str) -> None:
-        self.fill_results_for_selected_circunscription()
-
-    def fill_results_for_selected_circunscription(self) -> None:
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-
-        if self.election is None:
+    def refresh_results_view(self) -> None:
+        territorial_view = self._get_current_territorial_view()
+        self.current_territorial_view = territorial_view
+        if territorial_view is None:
+            self.results_title_label.configure(text="Resultados visuales")
+            self.results_summary_label.configure(text="Carga el Excel para visualizar bloques de partidos.")
+            self.blocks_canvas.render_view(self._build_empty_view())
+            self.pactometer_widget.render(None, [])
+            self._render_coalition_panel([])
             return
 
-        circunscription_value = self.circunscription_selector.get().strip()
-        if circunscription_value == "":
+        summary_text = self._build_results_summary_text(territorial_view)
+        self.results_title_label.configure(text="{0} — bloques por partido".format(territorial_view.nombre))
+        self.results_summary_label.configure(text=summary_text)
+        self.blocks_canvas.render_view(territorial_view)
+        coalition_parties = self._get_current_coalition_parties()
+        self.pactometer_widget.render(territorial_view, coalition_parties)
+        self._render_coalition_panel(coalition_parties)
+
+    def on_party_dropped(self, party_code: str, root_x: int, root_y: int) -> None:
+        if self.current_territorial_view is None:
+            self.set_results_feedback(DomainMessageBuilder.build_error("No hay una vista territorial activa."))
             return
-
-        circ_code = circunscription_value.split(" - ", 1)[0]
-        circunscription = self.election.circunscripciones.get(circ_code)
-        if circunscription is None:
+        if not self.pactometer_widget.is_inside_widget(root_x, root_y):
+            self.set_results_feedback(DomainMessageBuilder.build_error("Debes soltar el bloque dentro del pactómetro."))
             return
-
-        selected_party = self.party_selector.get().strip()
-        for result in circunscription.obtener_resultados_ordenados_por_votos():
-            if selected_party not in ("", "Todos"):
-                selected_party_code = selected_party.split(" - ", 1)[0]
-                if result.partido.codigo != selected_party_code:
-                    continue
-
-            self.results_tree.insert(
-                "",
-                END,
-                values=(
-                    result.partido.get_identificador_presentacion(),
-                    result.votos,
-                    "{0:.2f}".format(result.obtener_porcentaje_voto(circunscription.votos_totales_candidaturas_calculados)),
-                    result.escanos_oficiales,
-                    result.escanos_calculados,
-                    result.obtener_diferencia_escanos(),
-                ),
+        for existing_code in self.current_coalition_codes:
+            if existing_code == party_code:
+                self.set_results_feedback(DomainMessageBuilder.build_error("Ese partido ya esta presente en la coalicion."))
+                return
+        self.current_coalition_codes.append(party_code)
+        coalition_parties = self._get_current_coalition_parties()
+        self.pactometer_widget.render(self.current_territorial_view, coalition_parties)
+        self._render_coalition_panel(coalition_parties)
+        party = self._find_party_in_current_view(party_code)
+        if party is not None:
+            self.set_results_feedback(
+                DomainMessageBuilder.build_confirmation(
+                    "Se añadio {0} al pactometro con {1} escaños.".format(party.etiqueta, party.escanos_oficiales)
+                )
             )
+
+    def remove_party_from_pactometer(self, party_code: str) -> None:
+        if party_code not in self.current_coalition_codes:
+            self.set_results_feedback(DomainMessageBuilder.build_error("El partido indicado no esta en el pactometro."))
+            return
+        updated_codes: List[str] = []
+        for existing_code in self.current_coalition_codes:
+            if existing_code != party_code:
+                updated_codes.append(existing_code)
+        self.current_coalition_codes = updated_codes
+        coalition_parties = self._get_current_coalition_parties()
+        self.pactometer_widget.render(self.current_territorial_view, coalition_parties)
+        self._render_coalition_panel(coalition_parties)
+        party = self._find_party_in_current_view(party_code)
+        if party is not None:
+            self.set_results_feedback(
+                DomainMessageBuilder.build_confirmation(
+                    "Se retiro {0} del pactometro.".format(party.etiqueta)
+                )
+            )
+
+    def clear_pactometer(self, silent: bool = False) -> None:
+        self.current_coalition_codes = []
+        coalition_parties: List[TerritorialPartySummary] = []
+        self.pactometer_widget.render(self.current_territorial_view, coalition_parties)
+        self._render_coalition_panel(coalition_parties)
+        if not silent:
+            self.set_results_feedback(DomainMessageBuilder.build_confirmation("Se vacio el pactometro actual."))
+
+    def set_results_feedback(self, message: str) -> None:
+        self.results_feedback_label.configure(text=message)
 
     def render_statistics(self) -> None:
         if self.election is None:
@@ -296,8 +402,8 @@ class ElectionAnalyzerApplication(ctk.CTk):
         if self.election is None:
             return
 
-        circ_a = self._get_selected_circunscription(self.compare_a_selector.get())
-        circ_b = self._get_selected_circunscription(self.compare_b_selector.get())
+        circ_a = self._get_selected_circunscription_for_charts(self.compare_a_selector.get())
+        circ_b = self._get_selected_circunscription_for_charts(self.compare_b_selector.get())
         if circ_a is None or circ_b is None:
             return
 
@@ -311,7 +417,7 @@ class ElectionAnalyzerApplication(ctk.CTk):
         canvas_seats.draw()
         canvas_seats.get_tk_widget().grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
 
-    def _get_selected_circunscription(self, selector_value: str):
+    def _get_selected_circunscription_for_charts(self, selector_value: str):
         if self.election is None:
             return None
         if selector_value.strip() == "":
